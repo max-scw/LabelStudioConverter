@@ -66,8 +66,14 @@ class LabelStudioAnnotation:
         values = self.ensure_uniqueness_of_annotations(annotations, ["original_width", "original_height"])
         return values["original_width"], values["original_height"]
 
-    def _coco_images(self, path_to_files: Union[str, pl.Path] = None) -> List[dict]:
-        coco_images = []
+    def _sacle_to_abs_coordinates(self, val: List[float], original_width: int, original_height: int) -> List[int]:
+        num = len(val)
+
+        num = int(num / 2)
+        return [self._to_decimal_precision(el / 100 * fct)
+                for el, fct in zip(val, [original_width, original_height] * num)]
+
+    def _iter_images(self, path_to_files: Union[str, pl.Path] = None) -> Tuple[pl.Path, Tuple[int, int], dict]:
         # label-studio organizes annotations per file => loop over all files
         for fl in self._iterfiles():
             # strip the preceding hash code
@@ -78,14 +84,19 @@ class LabelStudioAnnotation:
                 # path_to_files = pl.Path(file["data"]["image"])
                 file_path = pl.Path(filename)
             else:
-                file_path = pl.Path(path_to_files).with_name(filename)  # FIXME: label-studio path
+                file_path = pl.Path(path_to_files).with_name(filename)
 
-            original_width, original_height = self._extract_original_size(fl)
+            img_sz = self._extract_original_size(fl)
+            yield file_path, img_sz, fl
 
-            coco_images.append({"width": original_width,
-                                "height": original_height,
+    # ----- COCO-style data
+    def _coco_images(self, path_to_files: Union[str, pl.Path] = None) -> List[dict]:
+        coco_images = []
+        for nm, img_sz, fl in self._iter_images(path_to_files):
+            coco_images.append({"width": img_sz[0],
+                                "height": img_sz[1],
                                 "id": fl["id"],  # FIXME: what is the id here?
-                                "file_name": file_path.as_posix()  # TODO: ensure uniqueness of filenames
+                                "file_name": nm.as_posix()  # TODO: ensure uniqueness of filenames
                                 })
         return coco_images
 
@@ -110,13 +121,6 @@ class LabelStudioAnnotation:
         else:
             coco_categories = [{"id": i, "name": c} for i, c in enumerate(categories)]
         return coco_categories
-
-    def _sacle_to_abs_coordinates(self, val: List[float], original_width: int, original_height: int) -> List[int]:
-        num = len(val)
-
-        num = int(num/2)
-        return [self._to_decimal_precision(el / 100 * fct)
-                for el, fct in zip(val, [original_width, original_height] * num)]
 
     def _coco_annotations(self, coco_categories):
         category_names = [el["supercategory"] for el in coco_categories]
