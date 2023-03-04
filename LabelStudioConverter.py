@@ -129,7 +129,7 @@ class LabelStudioAnnotation:
                 if self._istypebbox(ty):
                     category_id = self.categories[ty].index(lbl)
                     # Label Studio stores coordinates as relative values
-                    bbox_rel = [self._to_decimal_precision(val[ky]) for ky in ["x", "y", "width", "height"]]
+                    bbox_rel = [self._to_decimal_precision(val[ky] / 100) for ky in ["x", "y", "width", "height"]]
                     bbox.append(tuple([category_id] + bbox_rel))
                 else:
                     raise ValueError(f"Unknown label type: {ty}")
@@ -295,5 +295,6 @@ if __name__ == "__main__":
     for nm, info in data.items():
         # create new file
         with open((path_to_save_dir / nm).with_suffix(".txt"), "w") as fid:
-            json.dump(info, fid)
+            for ln in info:
+                fid.write(" ".join([str(el) for el in ln]) + "\n")
 
