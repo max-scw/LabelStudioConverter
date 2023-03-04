@@ -1,15 +1,16 @@
 import json
 import pathlib as pl
 import re
-import datetime
 
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, Dict, Any
 
 
 class LabelStudioAnnotation:
+    _categories = None
+    _decimal_precision = None
+
     def __init__(self,
                  path_to_annotations: Union[str, pl.Path],
-                 decimal_precision: int = 0
                  ) -> None:
         # ensure pathlib object
         path_to_annotations = pl.Path(path_to_annotations)
@@ -17,11 +18,14 @@ class LabelStudioAnnotation:
             raise ValueError(f"Annotation file {path_to_annotations.as_posix()} does not exist!")
         # store path as local variable
         self.path = path_to_annotations
-        # store precision value (if it is valid)
-        self.decimal_precision = decimal_precision if decimal_precision > 0 else 0
         # load file
         with open(self.path, "r") as fid:
             self.data = json.load(fid)
+
+    def _set_decimal_precision(self, decimal_precision: int) -> bool:
+        # store precision value (if it is valid)
+        self._decimal_precision = decimal_precision if decimal_precision > 0 else 0
+        return True
 
     def _iterfiles(self) -> dict:
         # label-studio organizes annotations per file => loop over all files
@@ -45,7 +49,7 @@ class LabelStudioAnnotation:
 
     def _to_decimal_precision(self, num: Union[float, int], precision: int = None) -> Union[float, int]:
         if precision is None:
-            precision = self.decimal_precision
+            precision = self._decimal_precision
         out = round(num, precision)
         if precision == 0:
             out = int(out)
@@ -77,7 +81,7 @@ class LabelStudioAnnotation:
         # label-studio organizes annotations per file => loop over all files
         for fl in self._iterfiles():
             # strip the preceding hash code
-            filename = extract_original_filename(fl["file_upload"])
+            filename = self._get_original_filename(fl)
             # path to file
             if path_to_files is None:
                 # suffix = pl.Path(filename_uploaded).suffix
@@ -88,6 +92,53 @@ class LabelStudioAnnotation:
 
             img_sz = self._extract_original_size(fl)
             yield file_path, img_sz, fl
+
+    def _get_categories(self, sort_labels: bool = True):
+        # find all label types and values
+        categories = dict()
+        for fl in self._iterfiles():
+            for lbl, ty, val in self._iterlabels(fl):
+                if ty in categories:
+                    if lbl not in categories[ty]:
+                        categories[ty].append(lbl)
+                else:
+                    categories[ty] = [lbl]
+        if sort_labels:
+            for ty in categories.keys():
+                categories[ty].sort()
+        self._categories = categories
+        return True
+
+    @property
+    def categories(self) -> Dict[str, list]:
+        if self._categories is None:
+            self._get_categories()
+        return self._categories
+
+    def _get_original_filename(self, fl: dict) -> str:
+        return extract_original_filename(fl["file_upload"])
+
+    # ----- YOLO-style data
+    def _yolo_annotations(self) -> Dict[Any, List[Tuple[int, float, float, float, float]]]:
+        info = dict()
+        for fl in self._iterfiles():
+            image_name = self._get_original_filename(fl)
+
+            bbox = []
+            for lbl, ty, val in self._iterlabels(fl):
+                if self._istypebbox(ty):
+                    category_id = self.categories[ty].index(lbl)
+                    # Label Studio stores coordinates as relative values
+                    bbox_rel = [self._to_decimal_precision(val[ky]) for ky in ["x", "y", "width", "height"]]
+                    bbox.append(tuple([category_id] + bbox_rel))
+                else:
+                    raise ValueError(f"Unknown label type: {ty}")
+            info[image_name] = bbox
+        return info
+
+    def get_yolo_data(self, decimal_precision: int = 5):
+        self._set_decimal_precision(decimal_precision)
+        return self._yolo_annotations()
 
     # ----- COCO-style data
     def _coco_images(self, path_to_files: Union[str, pl.Path] = None) -> List[dict]:
@@ -154,6 +205,8 @@ class LabelStudioAnnotation:
                     keypoints[idx + 2] = 2  # FIXME: read visibility from JSON file
                     # v=0: not labeled (in which case x=y=0), v=1: labeled but not visible, and v=2: labeled and visible
                     assert len(keypoints) == len(keypoint_categories) * 3, "Length of list 'keypoints' changed unexpectedly!"  # FIXME: delete
+                else:
+                    raise ValueError(f"Unknown label type: {ty}")
 
             coco_annotations.append({"id": id,
                                      "image_id": image_id,
@@ -170,7 +223,9 @@ class LabelStudioAnnotation:
             id += 1
         return coco_annotations
 
-    def get_coco_data(self, path_to_files: Union[str, pl.Path] = None) -> dict:
+    def get_coco_data(self, path_to_files: Union[str, pl.Path] = None, decimal_precision: int = 0) -> dict:
+        self._set_decimal_precision(decimal_precision)
+
         data_coco_images = self._coco_images(path_to_files=path_to_files)
         data_coco_categories = self._coco_categories()
         data_coco_annotations = self._coco_annotations(data_coco_categories)
@@ -223,12 +278,22 @@ def extract_original_filename(filename_with_prefix: str) -> str:
 
 
 if __name__ == "__main__":
-    path_to_labelstudio = pl.Path("project-1-at-2023-02-14-10-28-8650d03c.json")
+    # # COCO-style data
+    # path_to_labelstudio = pl.Path("project-1-at-2023-02-14-10-28-8650d03c.json")
+    #
+    # # create class instance and export COCO-style (text) data
+    # data = LabelStudioAnnotation(path_to_annotations=path_to_labelstudio).get_coco_data()
+    #
+    # # write new file
+    # with open(path_to_labelstudio.with_name("annotations.json"), "w") as fid:
+    #     json.dump(data, fid)
 
-    # create class instance and export COCO-style (text) data
-    data = LabelStudioAnnotation(path_to_annotations=path_to_labelstudio).get_coco_data()
-
-    # write new file
-    with open(path_to_labelstudio.with_name("annotations.json"), "w") as fid:
-        json.dump(data, fid)
+    # YOLO-style data
+    path_to_labelstudio = pl.Path("project-1-at-2023-02-27-17-53-f408f0d4.json")
+    data = LabelStudioAnnotation(path_to_annotations=path_to_labelstudio).get_yolo_data()
+    path_to_save_dir = pl.Path("export")
+    for nm, info in data.items():
+        # create new file
+        with open((path_to_save_dir / nm).with_suffix(".txt"), "w") as fid:
+            json.dump(info, fid)
 
