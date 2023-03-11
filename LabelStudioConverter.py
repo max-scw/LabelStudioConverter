@@ -115,7 +115,8 @@ class LabelStudioAnnotation:
             self._get_categories()
         return self._categories
 
-    def _get_original_filename(self, fl: dict) -> str:
+    @staticmethod
+    def _get_original_filename(fl: dict) -> str:
         return extract_original_filename(fl["file_upload"])
 
     # ----- YOLO-style data
@@ -129,8 +130,12 @@ class LabelStudioAnnotation:
                 if self._istypebbox(ty):
                     category_id = self.categories[ty].index(lbl)
                     # Label Studio stores coordinates as relative values
-                    bbox_rel = [self._to_decimal_precision(val[ky] / 100) for ky in ["x", "y", "width", "height"]]
-                    bbox.append(tuple([category_id] + bbox_rel))
+                    bbox_rel = [val[ky] / 100 for ky in ["x", "y", "width", "height"]]
+                    # xy represents lower left corner of the bounding box.
+                    # Transform to center of the bounding box as YOLO expects
+                    bbox_rel[0] += bbox_rel[2] / 2
+                    bbox_rel[1] += bbox_rel[3] / 2
+                    bbox.append(tuple([category_id] + [self._to_decimal_precision(el) for el in bbox_rel]))
                 else:
                     raise ValueError(f"Unknown label type: {ty}")
             info[image_name] = bbox
@@ -289,7 +294,7 @@ if __name__ == "__main__":
     #     json.dump(data, fid)
 
     # YOLO-style data
-    path_to_labelstudio = pl.Path("project-1-at-2023-02-27-17-53-f408f0d4.json")
+    path_to_labelstudio = pl.Path("2023-03-10_CNN4VIAB_79.json")
     data = LabelStudioAnnotation(path_to_annotations=path_to_labelstudio).get_yolo_data()
     path_to_save_dir = pl.Path("export")
     for nm, info in data.items():
